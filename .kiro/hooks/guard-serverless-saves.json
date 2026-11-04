@@ -1,0 +1,14 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Lint & Verify Serverless Handlers on Save",
+      "trigger": "PostFileSave",
+      "matcher": "\\.(ts|tsx|py)$",
+      "action": {
+        "type": "command",
+        "command": "npm run lint --if-present && npm run test:unit --if-present"
+      }
+    }
+  ]
+}

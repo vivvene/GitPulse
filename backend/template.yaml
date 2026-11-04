@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  GitPulse - Cloud-Synced Git Recovery & Telemetry Hub
+  Zero-Dollar Serverless Architecture adhering to AWS Always-Free Tier limits.
+
+Globals:
+  Function:
+    Timeout: 10
+    MemorySize: 128
+    Architectures:
+      - arm64
+    Runtime: python3.12
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref GitPulseCoreTable
+        POWERTOOLS_SERVICE_NAME: GitPulseService
+        LOG_LEVEL: INFO
+
+Resources:
+  # =========================================================================
+  # 1. Single-Table DynamoDB (Zero Idle Cost On-Demand / Free-Tier)
+  # =========================================================================
+  GitPulseCoreTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: gitpulse_core
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      Tags:
+        - Key: Project
+          Value: GitPulse
+        - Key: CostCenter
+          Value: FreeTierZeroDollar
+
+  # =========================================================================
+  # 2. Serverless Lambda Compute (ARM64 / Graviton2 + Direct Function URLs)
+  # =========================================================================
+  IngestTelemetryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.ingest_telemetry.lambda_handler
+      CodeUri: src/
+      Description: Ingests Git state failure snapshots and computes deterministic recovery scripts.
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GitPulseCoreTable
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - "*"
+          AllowMethods:
+            - POST
+            - OPTIONS
+          AllowHeaders:
+            - Content-Type
+            - Authorization
+            - X-API-Key
+
+  GetMetricsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.get_metrics.lambda_handler
+      CodeUri: src/
+      Description: Queries single-table DynamoDB for team repository health metrics and recent incidents.
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref GitPulseCoreTable
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - "*"
+          AllowMethods:
+            - GET
+            - OPTIONS
+          AllowHeaders:
+            - Content-Type
+            - Authorization
+
+  # =========================================================================
+  # 3. Amazon Cognito User Pool (Lite Tier: Up to 10k MAUs completely free)
+  # =========================================================================
+  GitPulseUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: gitpulse-user-pool
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: false
+
+  GitPulseUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: gitpulse-web-client
+      UserPoolId: !Ref GitPulseUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+  # =========================================================================
+  # 4. S3 Static Hosting for Dashboard (Free Tier: 5GB + CloudFront 1TB)
+  # =========================================================================
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "gitpulse-frontend-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+Outputs:
+  IngestTelemetryFunctionUrl:
+    Description: Direct Function URL for CLI & Webhook telemetry ingestion (No API Gateway costs)
+    Value: !GetAtt IngestTelemetryFunctionUrl.FunctionUrl
+
+  GetMetricsFunctionUrl:
+    Description: Direct Function URL for React Dashboard queries (No API Gateway costs)
+    Value: !GetAtt GetMetricsFunctionUrl.FunctionUrl
+
+  DynamoDBTableName:
+    Description: Single-Table DynamoDB instance name
+    Value: !Ref GitPulseCoreTable
+
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID for web authentication
+    Value: !Ref GitPulseUserPool
+
+  CognitoClientId:
+    Description: Cognito Web Client ID
+    Value: !Ref GitPulseUserPoolClient

@@ -1,0 +1,14 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Sync API Telemetry Types on Lambda Change",
+      "trigger": "PostFileSave",
+      "matcher": "backend/(src|handlers)/.*\\.(py|ts)$",
+      "action": {
+        "type": "command",
+        "command": "node scripts/sync-schema.js --if-present"
+      }
+    }
+  ]
+}
